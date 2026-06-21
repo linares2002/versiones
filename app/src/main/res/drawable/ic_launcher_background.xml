@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Fondo verde UJA -->
+    <path
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z"
+        android:fillColor="#3D5A34"/>
+
+    <!-- Banda dorada inferior sutil -->
+    <path
+        android:pathData="M0,88 L108,88 L108,108 L0,108 Z"
+        android:fillColor="#2C4226"/>
+    <path
+        android:pathData="M0,100 L108,100 L108,108 L0,108 Z"
+        android:fillColor="#C8A84B"
+        android:fillAlpha="0.25"/>
+
+</vector>
