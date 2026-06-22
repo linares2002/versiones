@@ -13,7 +13,6 @@ import android.text.InputType;
 import android.text.method.ScrollingMovementMethod;
 import android.view.Gravity;
 import android.view.View;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -24,33 +23,30 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.io.File;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 public class WatchInstallActivity extends AppCompatActivity {
 
     public static final String EXTRA_APK_PATH = "apk_path";
 
-    // ── Paleta (coherente con MainActivity UJA) ───────────────────────────────
-    private static final int COL_BG        = Color.parseColor("#F5F5F0");
-    private static final int COL_WHITE     = Color.parseColor("#FFFFFF");
-    private static final int COL_TEXT      = Color.parseColor("#1C2019");
-    private static final int COL_TEXT_DIM  = Color.parseColor("#8A9180");
-    private static final int COL_GREEN     = Color.parseColor("#3D5A34");
-    private static final int COL_BORDER    = Color.parseColor("#E2E5DC");
-    private static final int COL_BLUE      = Color.parseColor("#1A4FA3");
-    private static final int COL_BLUE_BG   = Color.parseColor("#EBF0FB");
-    private static final int COL_ERROR     = Color.parseColor("#C04040");
-    private static final int COL_ERROR_BG  = Color.parseColor("#FAF0F0");
-    private static final int COL_ORANGE    = Color.parseColor("#B06820");
+    private static final int COL_BG       = Color.parseColor("#F5F5F0");
+    private static final int COL_WHITE    = Color.parseColor("#FFFFFF");
+    private static final int COL_TEXT     = Color.parseColor("#1C2019");
+    private static final int COL_TEXT_DIM = Color.parseColor("#8A9180");
+    private static final int COL_GREEN    = Color.parseColor("#3D5A34");
+    private static final int COL_BORDER   = Color.parseColor("#E2E5DC");
+    private static final int COL_BLUE     = Color.parseColor("#1A4FA3");
+    private static final int COL_BLUE_BG  = Color.parseColor("#EBF0FB");
+    private static final int COL_ERROR    = Color.parseColor("#C04040");
+    private static final int COL_ORANGE   = Color.parseColor("#B06820");
 
-    // ── Estado ────────────────────────────────────────────────────────────────
     private String apkPath;
-    private String discoveredIp;
-    private int    discoveredPairPort;
-    private int    discoveredConnectPort;
+    private volatile String discoveredIp;
+    private volatile int    discoveredPairPort;
+    private volatile int    discoveredConnectPort;
     private AppState state = AppState.IDLE;
 
     private NsdManager nsdManager;
@@ -58,47 +54,31 @@ public class WatchInstallActivity extends AppCompatActivity {
     private NsdManager.DiscoveryListener connectListener;
 
     private AdbWifiManager adbManager;
-    private final ExecutorService executor = Executors.newCachedThreadPool();
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService executor    = Executors.newCachedThreadPool();
+    private final Handler         mainHandler = new Handler(Looper.getMainLooper());
 
-    // ── Views ────────────────────────────────────────────────────────────────
-    private LinearLayout contentFrame;
     private TextView     tvStatus;
     private ProgressBar  progressBar;
-
-    // Sección código
     private LinearLayout cardCode;
     private EditText     etCode;
-
-    // Sección manual
     private LinearLayout cardManual;
     private EditText     etManualIp;
     private EditText     etManualPort;
     private EditText     etManualCode;
-
-    // Sección conectado
     private LinearLayout cardConnected;
     private TextView     tvConnectedDevice;
     private TextView     tvApkName;
     private TextView     btnInstall;
-
-    // Log
-    private TextView tvLog;
-
-    // ── Ciclo de vida ─────────────────────────────────────────────────────────
+    private TextView     tvLog;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         apkPath    = getIntent().getStringExtra(EXTRA_APK_PATH);
         nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
         adbManager = new AdbWifiManager(this);
-
         setContentView(buildLayout());
         setState(AppState.IDLE);
-
-        // Extraer binario adb en background
         executor.execute(() -> adbManager.extractAdbBinary());
     }
 
@@ -106,19 +86,19 @@ public class WatchInstallActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         stopDiscovery();
+        executor.execute(() -> adbManager.killServer());
         executor.shutdownNow();
     }
 
-    // ── mDNS Discovery ────────────────────────────────────────────────────────
+    // ── mDNS ─────────────────────────────────────────────────────────────────
 
     private void startMdnsDiscovery() {
         setState(AppState.DISCOVERING);
         log("🔍 Buscando reloj en la red WiFi...");
         log("   Activa «Emparejar nuevo dispositivo» en el reloj");
 
-        // Escuchar puerto de emparejamiento
         pairingListener = createDiscoveryListener("_adb-tls-pairing._tcp.", info -> {
-            String ip   = info.getHost() != null ? info.getHost().getHostAddress() : null;
+            String ip  = extractIp(info);
             int    port = info.getPort();
             if (ip == null) return;
             mainHandler.post(() -> {
@@ -132,12 +112,16 @@ public class WatchInstallActivity extends AppCompatActivity {
             });
         });
 
-        // Escuchar puerto de conexión (diferente al de emparejamiento)
         connectListener = createDiscoveryListener("_adb-tls-connect._tcp.", info -> {
-            int port = info.getPort();
+            String ip  = extractIp(info);
+            int    port = info.getPort();
+            if (ip == null) return;
             mainHandler.post(() -> {
                 discoveredConnectPort = port;
-                log("📡 Puerto de conexión: " + port);
+                log("📡 Puerto de conexión: " + ip + ":" + port);
+                // Intenta conectar directamente: si ya hubo un emparejamiento
+                // previo nos saltamos el paso del código automáticamente.
+                tryDirectConnect(ip, port);
             });
         });
 
@@ -149,16 +133,13 @@ public class WatchInstallActivity extends AppCompatActivity {
 
     private NsdManager.DiscoveryListener createDiscoveryListener(
             String type, ResolvedCallback onResolved) {
-
         return new NsdManager.DiscoveryListener() {
             @Override public void onDiscoveryStarted(String s) {}
             @Override public void onDiscoveryStopped(String s) {}
             @Override public void onStartDiscoveryFailed(String s, int e) {
-                mainHandler.post(() -> log("⚠️ Error al iniciar mDNS: " + e));
+                mainHandler.post(() -> log("⚠️ Error mDNS: " + e));
             }
-            @Override public void onStopDiscoveryFailed(String s, int e) {
-                mainHandler.post(() -> log("⚠️ Error al detener mDNS: " + e));
-            }
+            @Override public void onStopDiscoveryFailed(String s, int e) {}
             @Override public void onServiceLost(NsdServiceInfo i) {}
             @Override public void onServiceFound(NsdServiceInfo serviceInfo) {
                 nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
@@ -175,6 +156,42 @@ public class WatchInstallActivity extends AppCompatActivity {
 
     private interface ResolvedCallback {
         void onResolved(NsdServiceInfo info);
+    }
+
+    /** Extrae la dirección IP de un NsdServiceInfo evitando direcciones IPv6 con zone ID
+     *  (p.ej. "fe80::1%wlan0") que ADB no acepta. Prefiere IPv4 si el host la tiene. */
+    private String extractIp(NsdServiceInfo info) {
+        if (info.getHost() == null) return null;
+        String addr = info.getHost().getHostAddress();
+        if (addr == null) return null;
+        // Eliminar zone ID de IPv6 (e.g. "fe80::1%wlan0" → "fe80::1")
+        int zoneIdx = addr.indexOf('%');
+        if (zoneIdx >= 0) addr = addr.substring(0, zoneIdx);
+        return addr;
+    }
+
+    /** Intenta conectar sin emparejar (emparejamiento previo ya existente).
+     *  Si tiene éxito y seguimos en DISCOVERING, pasamos directamente a CONNECTED. */
+    private void tryDirectConnect(String ip, int port) {
+        executor.execute(() -> {
+            AdbResult result = adbManager.connect(ip, port);
+            mainHandler.post(() -> {
+                if (state != AppState.DISCOVERING) return; // ya entró en flujo de emparejamiento
+                if (result.success) {
+                    stopDiscovery();
+                    log("✅ Conectado directamente (emparejamiento previo): " + ip + ":" + port);
+                    setState(AppState.CONNECTED);
+                    tvConnectedDevice.setText("Conectado: " + ip + ":" + port);
+                    if (apkPath != null) {
+                        tvApkName.setText(new File(apkPath).getName());
+                        btnInstall.setAlpha(1f);
+                        btnInstall.setEnabled(true);
+                    }
+                } else {
+                    log("  Sin emparejamiento previo — activa «Emparejar nuevo dispositivo»");
+                }
+            });
+        });
     }
 
     private void stopDiscovery() {
@@ -194,51 +211,42 @@ public class WatchInstallActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 if (result.success) {
                     log("✅ Emparejamiento correcto");
-                    log("⚡ Conectando automáticamente...");
+                    log("⚡ Conectando...");
                     stopDiscovery();
                     autoConnect(ip);
                 } else {
-                    log("❌ Error: " + result.output);
+                    log("❌ " + result.output);
                     setState(AppState.WAITING_CODE);
                 }
             });
         });
     }
 
-    // ── Auto-connect (igual que Android Studio) ───────────────────────────────
-
     private void autoConnect(String ip) {
         executor.execute(() -> {
             int connectPort = discoveredConnectPort;
-
-            // Si no tenemos el puerto de conexión aún, esperar hasta 6 seg a que mDNS lo anuncie
             if (connectPort <= 0) {
-                mainHandler.post(() -> log("🔍 Esperando puerto de conexión por mDNS..."));
+                mainHandler.post(() -> log("🔍 Esperando puerto de conexión..."));
                 CountDownLatch latch = new CountDownLatch(1);
-
-                // Relanzar listener de conexión
-                NsdManager.DiscoveryListener tmpListener = createDiscoveryListener(
+                NsdManager.DiscoveryListener tmp = createDiscoveryListener(
                         "_adb-tls-connect._tcp.", info -> {
-                            if (ip.equals(info.getHost() != null
-                                    ? info.getHost().getHostAddress() : "")) {
+                            String resolvedIp = extractIp(info);
+                            if (ip.equals(resolvedIp)) {
                                 discoveredConnectPort = info.getPort();
                                 latch.countDown();
                             }
                         });
-                mainHandler.post(() ->
-                        nsdManager.discoverServices("_adb-tls-connect._tcp.",
-                                NsdManager.PROTOCOL_DNS_SD, tmpListener));
-
+                mainHandler.post(() -> nsdManager.discoverServices(
+                        "_adb-tls-connect._tcp.", NsdManager.PROTOCOL_DNS_SD, tmp));
                 try { latch.await(6, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-
-                try { nsdManager.stopServiceDiscovery(tmpListener); } catch (Exception ignored) {}
+                try { nsdManager.stopServiceDiscovery(tmp); } catch (Exception ignored) {}
                 connectPort = discoveredConnectPort;
             }
 
             if (connectPort <= 0) {
                 mainHandler.post(() -> {
-                    log("⚠️ No se detectó el puerto de conexión automáticamente");
-                    log("💡 Introduce la IP y puerto que muestra el reloj en «Depuración inalámbrica»");
+                    log("⚠️ No se detectó el puerto de conexión");
+                    log("💡 Introduce la IP y puerto de «Depuración inalámbrica»");
                     setState(AppState.WAITING_CODE);
                 });
                 return;
@@ -257,7 +265,7 @@ public class WatchInstallActivity extends AppCompatActivity {
                         btnInstall.setEnabled(true);
                     }
                 } else {
-                    log("❌ Error conexión: " + result.output);
+                    log("❌ " + result.output);
                     setState(AppState.ERROR);
                 }
             });
@@ -269,15 +277,15 @@ public class WatchInstallActivity extends AppCompatActivity {
     private void installApk() {
         if (apkPath == null) return;
         setState(AppState.INSTALLING);
-        log("📲 Instalando " + new File(apkPath).getName() + " en el reloj...");
+        log("📲 Instalando " + new File(apkPath).getName() + "...");
         executor.execute(() -> {
             AdbResult result = adbManager.install(apkPath);
             mainHandler.post(() -> {
                 if (result.success) {
-                    log("🎉 ¡Instalación completada con éxito!");
+                    log("🎉 ¡Instalación completada!");
                     setState(AppState.DONE);
                 } else {
-                    log("❌ Error instalación: " + result.output);
+                    log("❌ " + result.output);
                     setState(AppState.CONNECTED);
                     btnInstall.setAlpha(1f);
                     btnInstall.setEnabled(true);
@@ -286,7 +294,7 @@ public class WatchInstallActivity extends AppCompatActivity {
         });
     }
 
-    // ── Estado visual ─────────────────────────────────────────────────────────
+    // ── Estado ────────────────────────────────────────────────────────────────
 
     private void setState(AppState s) {
         state = s;
@@ -344,40 +352,35 @@ public class WatchInstallActivity extends AppCompatActivity {
     private void log(String message) {
         String current = tvLog.getText().toString();
         tvLog.setText(current.isEmpty() ? message : current + "\n" + message);
-        // Auto-scroll
-        if (tvLog.getLayout() != null) {
+        tvLog.post(() -> {
+            if (tvLog.getLayout() == null) return;
             int scroll = tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
             if (scroll > 0) tvLog.scrollTo(0, scroll);
-        }
+        });
     }
 
-    // ── Build UI ──────────────────────────────────────────────────────────────
+    // ── Layout ────────────────────────────────────────────────────────────────
 
     private View buildLayout() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(COL_BG);
-
-        // TopBar
         root.addView(buildTopBar());
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        scroll.setLayoutParams(scrollLp);
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        contentFrame = new LinearLayout(this);
-        contentFrame.setOrientation(LinearLayout.VERTICAL);
-        contentFrame.setPadding(dp(20), dp(20), dp(20), dp(32));
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(20), dp(20), dp(32));
 
-        // Status
         tvStatus = new TextView(this);
         tvStatus.setTextSize(13f);
         tvStatus.setPadding(0, 0, 0, dp(4));
-        contentFrame.addView(tvStatus);
+        content.addView(tvStatus);
 
-        // ProgressBar
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setIndeterminate(true);
         progressBar.setVisibility(View.GONE);
@@ -386,34 +389,29 @@ public class WatchInstallActivity extends AppCompatActivity {
         pbLp.topMargin = dp(6);
         pbLp.bottomMargin = dp(16);
         progressBar.setLayoutParams(pbLp);
-        contentFrame.addView(progressBar);
+        content.addView(progressBar);
 
-        // Card 1: Buscar reloj
-        contentFrame.addView(buildStepCard());
-        contentFrame.addView(spacer(dp(14)));
+        content.addView(buildStepCard());
+        content.addView(spacer(dp(14)));
 
-        // Card 2: Código (oculta inicialmente)
         cardCode = buildCodeCard();
         cardCode.setVisibility(View.GONE);
-        contentFrame.addView(cardCode);
-        contentFrame.addView(spacer(dp(14)));
+        content.addView(cardCode);
+        content.addView(spacer(dp(14)));
 
-        // Card manual (desplegable)
         cardManual = buildManualCard();
         cardManual.setVisibility(View.GONE);
-        contentFrame.addView(cardManual);
-        contentFrame.addView(spacer(dp(14)));
+        content.addView(cardManual);
+        content.addView(spacer(dp(14)));
 
-        // Card 3: Conectado + instalar (oculta inicialmente)
         cardConnected = buildInstallCard();
         cardConnected.setVisibility(View.GONE);
-        contentFrame.addView(cardConnected);
-        contentFrame.addView(spacer(dp(14)));
+        content.addView(cardConnected);
+        content.addView(spacer(dp(14)));
 
-        // Log
-        contentFrame.addView(buildLogCard());
+        content.addView(buildLogCard());
 
-        scroll.addView(contentFrame);
+        scroll.addView(content);
         root.addView(scroll);
         return root;
     }
@@ -424,12 +422,11 @@ public class WatchInstallActivity extends AppCompatActivity {
         bar.setBackgroundColor(COL_WHITE);
         bar.setPadding(dp(20), dp(48), dp(20), dp(16));
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable barBg = new GradientDrawable();
-        barBg.setColor(COL_WHITE);
-        barBg.setStroke(dp(1), COL_BORDER);
-        bar.setBackground(barBg);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(COL_WHITE);
+        bg.setStroke(dp(1), COL_BORDER);
+        bar.setBackground(bg);
 
-        // Botón atrás
         TextView back = new TextView(this);
         back.setText("←");
         back.setTextSize(20);
@@ -449,7 +446,7 @@ public class WatchInstallActivity extends AppCompatActivity {
         col.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("Samsung Galaxy Watch 5 · ADB WiFi");
+        sub.setText("Samsung Galaxy Watch · ADB WiFi");
         sub.setTextColor(COL_TEXT_DIM);
         sub.setTextSize(12);
         sub.setPadding(0, dp(2), 0, 0);
@@ -461,13 +458,11 @@ public class WatchInstallActivity extends AppCompatActivity {
 
     private LinearLayout buildStepCard() {
         LinearLayout card = card();
-
-        TextView label = stepLabel("1", "Buscar reloj");
-        card.addView(label);
+        card.addView(stepLabel("1", "Buscar reloj"));
         card.addView(spacer(dp(6)));
 
         TextView desc = new TextView(this);
-        desc.setText("Asegúrate de que el reloj y este móvil estén en la misma red WiFi.\n\nEn el reloj: Ajustes → Opciones de desarrollador → Depuración inalámbrica → Emparejar nuevo dispositivo");
+        desc.setText("Asegúrate de que el reloj y el móvil están en la misma red WiFi.\n\nEn el reloj: Ajustes → Opciones de desarrollador → Depuración inalámbrica → Emparejar nuevo dispositivo");
         desc.setTextColor(COL_TEXT_DIM);
         desc.setTextSize(13f);
         desc.setLineSpacing(dp(2), 1f);
@@ -477,7 +472,6 @@ public class WatchInstallActivity extends AppCompatActivity {
         TextView btn = actionButton("Iniciar búsqueda automática", COL_BLUE);
         btn.setOnClickListener(v -> startMdnsDiscovery());
         card.addView(btn);
-
         card.addView(spacer(dp(12)));
 
         TextView toggleManual = new TextView(this);
@@ -489,18 +483,16 @@ public class WatchInstallActivity extends AppCompatActivity {
                 cardManual.setVisibility(
                         cardManual.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         card.addView(toggleManual);
-
         return card;
     }
 
     private LinearLayout buildCodeCard() {
         LinearLayout card = card();
-
         card.addView(stepLabel("2", "Código de emparejamiento"));
         card.addView(spacer(dp(6)));
 
         TextView desc = new TextView(this);
-        desc.setText("Introduce el código de 6 dígitos que muestra la pantalla del reloj:");
+        desc.setText("Introduce el código de 6 dígitos que muestra el reloj:");
         desc.setTextColor(COL_TEXT_DIM);
         desc.setTextSize(13f);
         card.addView(desc);
@@ -533,7 +525,6 @@ public class WatchInstallActivity extends AppCompatActivity {
             performPairing(discoveredIp, discoveredPairPort, code);
         });
         card.addView(confirmBtn);
-
         return card;
     }
 
@@ -566,10 +557,9 @@ public class WatchInstallActivity extends AppCompatActivity {
         etManualIp.setPadding(dp(10), dp(10), dp(10), dp(10));
         LinearLayout.LayoutParams ipLp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 2f);
+        ipLp.rightMargin = dp(8);
         etManualIp.setLayoutParams(ipLp);
         row.addView(etManualIp);
-
-        row.addView(spacer(dp(8)));
 
         etManualPort = new EditText(this);
         etManualPort.setHint("Puerto");
@@ -579,11 +569,9 @@ public class WatchInstallActivity extends AppCompatActivity {
         etManualPort.setInputType(InputType.TYPE_CLASS_NUMBER);
         etManualPort.setBackground(roundRect(dp(10), COL_WHITE, COL_BORDER));
         etManualPort.setPadding(dp(10), dp(10), dp(10), dp(10));
-        LinearLayout.LayoutParams portLp = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        etManualPort.setLayoutParams(portLp);
+        etManualPort.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(etManualPort);
-
         card.addView(row);
         card.addView(spacer(dp(8)));
 
@@ -602,26 +590,23 @@ public class WatchInstallActivity extends AppCompatActivity {
 
         TextView manualBtn = actionButton("Emparejar manualmente", COL_ORANGE);
         manualBtn.setOnClickListener(v -> {
-            String ip   = etManualIp.getText().toString().trim();
+            String ip      = etManualIp.getText().toString().trim();
             String portStr = etManualPort.getText().toString().trim();
-            String code = etManualCode.getText().toString().trim();
-            int port = portStr.isEmpty() ? 0 : Integer.parseInt(portStr);
-            if (ip.isEmpty() || port <= 0 || code.length() != 6) {
+            String code    = etManualCode.getText().toString().trim();
+            if (ip.isEmpty() || portStr.isEmpty() || code.length() != 6) {
                 Toast.makeText(this, "Rellena todos los campos", Toast.LENGTH_SHORT).show();
                 return;
             }
             discoveredIp       = ip;
-            discoveredPairPort = port;
-            performPairing(ip, port, code);
+            discoveredPairPort = Integer.parseInt(portStr);
+            performPairing(ip, discoveredPairPort, code);
         });
         card.addView(manualBtn);
-
         return card;
     }
 
     private LinearLayout buildInstallCard() {
         LinearLayout card = card();
-
         card.addView(stepLabel("3", "Instalar APK en el reloj"));
         card.addView(spacer(dp(8)));
 
@@ -633,7 +618,6 @@ public class WatchInstallActivity extends AppCompatActivity {
         card.addView(tvConnectedDevice);
         card.addView(spacer(dp(12)));
 
-        // Mostrar nombre APK que viene de MainActivity
         tvApkName = new TextView(this);
         tvApkName.setText(apkPath != null ? new File(apkPath).getName() : "Sin APK");
         tvApkName.setTextColor(COL_TEXT_DIM);
@@ -654,26 +638,24 @@ public class WatchInstallActivity extends AppCompatActivity {
         btnInstall.setAlpha(apkPath != null ? 1f : 0.4f);
         btnInstall.setOnClickListener(v -> installApk());
         card.addView(btnInstall);
-
         return card;
     }
 
     private LinearLayout buildLogCard() {
         LinearLayout card = card();
 
-        LinearLayout headerRow = new LinearLayout(this);
-        headerRow.setOrientation(LinearLayout.HORIZONTAL);
-        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView logLabel = new TextView(this);
         logLabel.setText("Registro");
         logLabel.setTextColor(COL_TEXT_DIM);
         logLabel.setTextSize(12f);
         logLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams llLp = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        logLabel.setLayoutParams(llLp);
-        headerRow.addView(logLabel);
+        logLabel.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(logLabel);
 
         TextView clearBtn = new TextView(this);
         clearBtn.setText("Limpiar");
@@ -681,8 +663,8 @@ public class WatchInstallActivity extends AppCompatActivity {
         clearBtn.setTextSize(11f);
         clearBtn.setPadding(dp(8), dp(4), dp(8), dp(4));
         clearBtn.setOnClickListener(v -> tvLog.setText(""));
-        headerRow.addView(clearBtn);
-        card.addView(headerRow);
+        header.addView(clearBtn);
+        card.addView(header);
         card.addView(spacer(dp(8)));
 
         tvLog = new TextView(this);
@@ -695,7 +677,6 @@ public class WatchInstallActivity extends AppCompatActivity {
         tvLog.setMaxLines(12);
         tvLog.setLineSpacing(dp(4), 1f);
         card.addView(tvLog);
-
         return card;
     }
 
@@ -710,16 +691,13 @@ public class WatchInstallActivity extends AppCompatActivity {
         bg.setStroke(dp(1), COL_BORDER);
         c.setBackground(bg);
         c.setPadding(dp(20), dp(20), dp(20), dp(20));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+        c.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        c.setLayoutParams(lp);
+                LinearLayout.LayoutParams.WRAP_CONTENT));
         return c;
     }
 
     private TextView stepLabel(String number, String title) {
-        // Devolvemos solo el título con número prefijado para simplificar
-        // (se puede hacer un row si se prefiere)
         TextView tv = new TextView(this);
         tv.setText(number + ".  " + title);
         tv.setTextColor(COL_TEXT);
