@@ -1,15 +1,29 @@
-*.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Build outputs
+build/
+.gradle/
+app/build/
+
+# Local config (contiene rutas absolutas del SDK, no compartir)
 local.properties
+
+# IDE
+.idea/
+*.iml
+*.swp
+.DS_Store
+
+# APKs y bundles generados por el build
+*.apk
+*.aab
+
+# Keystores y credenciales
+*.jks
+*.keystore
+keystore.properties
+
+# Archivos de profiling
+*.hprof
+
+# Carpetas de caché
+.cxx/
+captures/
