@@ -258,7 +258,8 @@ public class MainActivity extends AppCompatActivity {
         db.changelog = release.optString("body", "");
         String publishedAt = release.optString("published_at", "");
         db.fecha    = publishedAt.length() >= 10 ? publishedAt.substring(0, 10) : publishedAt;
-        db.filename = APK_FILENAMES[idx];
+        String base = APK_FILENAMES[idx].replace(".apk", "");
+        db.filename = base + "-" + db.version + ".apk";
         db.url      = APK_DOWNLOAD_URLS[idx];
 
         // Buscar tamaño del asset concreto en la lista de assets del release
@@ -500,7 +501,8 @@ public class MainActivity extends AppCompatActivity {
         // Borrar archivo previo
         File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         if (dir != null) {
-            String baseName = filename.replace(".apk", "");
+            int dashIdx = filename.indexOf('-');
+            String baseName = (dashIdx > 0) ? filename.substring(0, dashIdx) : filename.replace(".apk", "");
             File[] files = dir.listFiles();
             if (files != null) {
                 for (File f : files) {
@@ -743,14 +745,14 @@ public class MainActivity extends AppCompatActivity {
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView title = new TextView(this);
-        title.setText("Versiones");
+        title.setText("ECG Releases");
         title.setTextColor(COL_TEXT);
         title.setTextSize(20);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         titles.addView(title);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Distribución interna · BioGW");
+        subtitle.setText("V1.0.1");
         subtitle.setTextColor(COL_TEXT_DIM);
         subtitle.setTextSize(12);
         subtitle.setPadding(0, dp(2), 0, 0);
