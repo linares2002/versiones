@@ -1,0 +1,29 @@
+# Build outputs
+build/
+.gradle/
+app/build/
+
+# Local config (contiene rutas absolutas del SDK, no compartir)
+local.properties
+
+# IDE
+.idea/
+*.iml
+*.swp
+.DS_Store
+
+# APKs y bundles generados por el build
+*.apk
+*.aab
+
+# Keystores y credenciales
+*.jks
+*.keystore
+keystore.properties
+
+# Archivos de profiling
+*.hprof
+
+# Carpetas de caché
+.cxx/
+captures/
