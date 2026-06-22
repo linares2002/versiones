@@ -1,13 +1,13 @@
-# Versiones — Distribución interna BioGW
+# ECG Releases — Distribución interna BioGW
 
-App Android de distribución interna para el proyecto **BioGW** (Universidad de Jaén). Permite consultar la última versión publicada en GitHub Releases, descargar los APKs y instalar el APK del reloj directamente desde el móvil vía **ADB WiFi**, sin necesidad de ninguna app externa.
+App Android de distribución interna para el proyecto **BioGW** (Universidad de Jaén). Permite consultar la última versión publicada en GitHub Releases, descargar los APKs (con la versión en el nombre del archivo) e instalar el APK del reloj directamente desde el móvil vía **ADB WiFi**, sin necesidad de ninguna app externa.
 
 ---
 
 ## Características
 
 - Consulta automática de la última versión en [GitHub Releases](https://github.com/linares2002/ECG-arteria/releases)
-- Descarga de `biogw.apk` (teléfono) y `watch.apk` (reloj) con `DownloadManager`
+- Descarga de `biogw-<versión>.apk` (teléfono) y `watch-<versión>.apk` (reloj) con `DownloadManager`
 - Instalación del APK en **Samsung Galaxy Watch** vía ADB WiFi embebido
 - Descubrimiento automático del reloj por **mDNS** (`_adb-tls-pairing._tcp` / `_adb-tls-connect._tcp`)
 - Conexión directa si ya existe un emparejamiento previo (sin pedir código)
@@ -92,7 +92,7 @@ adb pull /sdcard/adb_deps/. app/src/main/jniLibs/arm64-v8a/
 ## Compilar
 
 ```bash
-git clone https://github.com/linares2002/ECG-arteria.git
+git clone https://github.com/linares2002/versiones.git
 cd versiones
 ./gradlew assembleDebug
 ```
