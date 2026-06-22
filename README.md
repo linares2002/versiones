@@ -1,4 +1,4 @@
-# ECG Releases — Distribución interna BioGW
+# ECG Releases
 
 App Android de distribución interna para el proyecto **BioGW** (Universidad de Jaén). Permite consultar la última versión publicada en GitHub Releases, descargar los APKs (con la versión en el nombre del archivo) e instalar el APK del reloj directamente desde el móvil vía **ADB WiFi**, sin necesidad de ninguna app externa.
 
